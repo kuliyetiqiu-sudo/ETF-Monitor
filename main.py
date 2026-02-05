@@ -8,7 +8,7 @@ import urllib3
 urllib3.disable_warnings()
 
 # ==========================================
-# 🎯 V7.0 终极云端版：精准控时 + 微信报警
+# 🎯 V7.3 终极云端版：阶梯式智能报警
 # ==========================================
 
 # 🔴🔴🔴 请在此处填入你的 PushPlus Token 🔴🔴🔴
@@ -33,8 +33,10 @@ PAIRS = [
     }
 ]
 
-# 全局变量：记录上次报警时间，防止微信轰炸
+# 全局变量：记录上次报警时间
 last_alert_time = {}
+# 新增全局变量：记录今日已发送次数
+alert_counts = {}
 
 def send_wechat(title, content):
     """发送微信通知"""
@@ -101,7 +103,7 @@ def calc_premium(conf, factors):
         return None
 
 def monitor_logic():
-    """核心监控逻辑"""
+    """核心监控逻辑 (含阶梯式冷却)"""
     f = get_market_factors()
     if not f: 
         print("⚠️ 无法获取市场因子，跳过本次循环")
@@ -120,9 +122,11 @@ def monitor_logic():
             # --- 判定信号 ---
             alert_msg = None
             alert_title = None
+            signal_type = "" # 标记信号类型
             
             # 1. 进攻信号
             if spread < STRATEGY_CONFIG['ATTACK_THRESHOLD']:
+                signal_type = "进攻"
                 alert_title = f"⚔️ 进攻信号: {pair['group']}"
                 alert_msg = (f"<h2 style='color:red'>建议切换: 卖{pair['my']['name']} -> 买{pair['target']['name']}</h2>"
                              f"<p>当前价差: <b>{spread:.2f}%</b> (小于阈值 {STRATEGY_CONFIG['ATTACK_THRESHOLD']}%)</p>"
@@ -131,20 +135,46 @@ def monitor_logic():
             
             # 2. 撤退信号
             elif spread > STRATEGY_CONFIG['RETREAT_THRESHOLD']:
+                signal_type = "撤退"
                 alert_title = f"🛡️ 撤退信号: {pair['group']}"
                 alert_msg = (f"<h2 style='color:green'>建议收网: 卖{pair['target']['name']} -> 回{pair['my']['name']}</h2>"
                              f"<p>当前价差: <b>{spread:.2f}%</b> (大于阈值 {STRATEGY_CONFIG['RETREAT_THRESHOLD']}%)</p>"
                              f"<p>我的持仓溢价: {p_my:.2f}%</p>"
                              f"<p>目标溢价: {p_target:.2f}%</p>")
             
-            # --- 发送报警 (带冷却时间) ---
+            # --- 发送报警 (阶梯式冷却策略) ---
             if alert_title:
-                key = f"{pair['group']}_{alert_title}"
-                # 冷却时间：15分钟内不重复报同一个警
-                if key not in last_alert_time or (time.time() - last_alert_time[key] > 900):
-                    print(f"🔥 触发报警: {alert_title}")
-                    send_wechat(alert_title, alert_msg)
+                # 生成唯一键值，例如 "纳指组_进攻"
+                key = f"{pair['group']}_{signal_type}"
+                
+                # 获取今日已发送次数 (默认0)
+                current_count = alert_counts.get(key, 0)
+                
+                # 🔥 核心策略：
+                # 前3次：非常急促 (5分钟/300秒 提醒一次)
+                # 3次后：非常佛系 (1小时/3600秒 提醒一次)
+                if current_count < 3:
+                    cooldown = 300 
+                else:
+                    cooldown = 3600
+
+                # 检查是否满足冷却时间
+                if key not in last_alert_time or (time.time() - last_alert_time[key] > cooldown):
+                    print(f"🔥 触发报警: {alert_title} (今日第{current_count + 1}次)")
+                    
+                    # 消息备注
+                    note = f"<br><br><span style='color:gray;font-size:12px'>今日第 {current_count + 1} 次提醒 (频次控制中)</span>"
+                    
+                    send_wechat(alert_title, alert_msg + note)
+                    
+                    # 更新状态
                     last_alert_time[key] = time.time()
+                    alert_counts[key] = current_count + 1
+                else:
+                    # 冷却期内只打日志
+                    wait_min = (cooldown - (time.time() - last_alert_time[key])) / 60
+                    print(f"   🙊 {pair['group']}{signal_type} 冷却中 (已发{current_count}次, 剩余 {wait_min:.1f} 分钟)")
+
             else:
                 # 没信号时只在后台打印
                 print(f"   💤 {pair['group']} 价差 {spread:.2f}% (无操作)")
@@ -152,7 +182,7 @@ def monitor_logic():
 if __name__ == "__main__":
     # 设置北京时区
     tz = pytz.timezone('Asia/Shanghai')
-    print("🚀 云端监控脚本启动...")
+    print("🚀 云端监控脚本启动 (V7.3 阶梯报警版)...")
     
     # 稍微测试一下微信推送是否通畅 (可选，不想每次启动都发就注释掉)
     # send_wechat("脚本上线通知", f"监控已启动，当前北京时间: {datetime.now(tz).strftime('%H:%M')}")
