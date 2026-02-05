@@ -16,20 +16,20 @@ PUSHPLUS_TOKEN = '229e6e58116042c8a0065709dd98eabc'
 
 # 策略配置 (复刻博主逻辑)
 STRATEGY_CONFIG = {
-    "ATTACK_THRESHOLD": 0.6,  # 进攻：价差小于 0.6% -> 买入
-    "RETREAT_THRESHOLD": 2.5  # 撤退：价差大于 2.5% -> 卖出
+    "ATTACK_THRESHOLD": 0.3,  # 进攻：价差小于 0.3% -> 买入
+    "RETREAT_THRESHOLD": 1.5  # 撤退：价差大于 1.5% -> 卖出
 }
 
 PAIRS = [
     {
         "group": "纳指组",
-        "my":     {"code": "159659", "name": "我的国泰", "symbol": "sz159659", "offset": 0.18, "index": "gb_ndx", "future": "NQ"},
-        "target": {"code": "159501", "name": "目标嘉实", "symbol": "sz159501", "offset": 0.18, "index": "gb_ndx", "future": "NQ"}
+        "my":     {"code": "159659", "name": "我的国泰", "symbol": "sz159659", "offset": 0, "index": "gb_ndx", "future": "NQ"},
+        "target": {"code": "159501", "name": "目标嘉实", "symbol": "sz159501", "offset": 0, "index": "gb_ndx", "future": "NQ"}
     },
     {
         "group": "标普组",
-        "my":     {"code": "159655", "name": "我的华夏", "symbol": "sz159655", "offset": 0.22, "index": "gb_inx", "future": "ES"},
-        "target": {"code": "513500", "name": "目标博时", "symbol": "sh513500", "offset": 0.22, "index": "gb_inx", "future": "ES"}
+        "my":     {"code": "159655", "name": "我的华夏", "symbol": "sz159655", "offset": 0, "index": "gb_inx", "future": "ES"},
+        "target": {"code": "513500", "name": "目标博时", "symbol": "sh513500", "offset": 0, "index": "gb_inx", "future": "ES"}
     }
 ]
 
