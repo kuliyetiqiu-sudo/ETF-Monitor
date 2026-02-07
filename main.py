@@ -5,15 +5,15 @@ import time
 from datetime import datetime
 import pytz
 import urllib3
-import traceback # 引入错误追踪，防止闪退看不到报错
+import traceback 
 
 urllib3.disable_warnings()
 
 # ==============================================================================
-# 🎯 V11.8 永不掉线版：1守2攻 + 24小时待机
+# 🎯 V11.9 自动轮班版：1守2攻 + 智能防超时 (完美适配GitHub)
 # ==============================================================================
 
-# 🔴🔴🔴 请确认你的 PushPlus Token 🔴🔴🔴
+# 🔴🔴🔴 你的 PushPlus Token 🔴🔴🔴
 PUSHPLUS_TOKEN = '229e6e58116042c8a0065709dd98eabc' 
 
 # 核心策略阈值
@@ -147,6 +147,7 @@ def monitor_logic():
             if alert_title:
                 key = f"{target['code']}_{signal_type}"
                 current_count = alert_counts.get(key, 0)
+                # 冷却规则: 前3次间隔10分钟(600s)，之后间隔1小时(3600s)
                 cooldown = 600 if current_count < 3 else 3600
 
                 if key not in last_alert_time or (time.time() - last_alert_time[key] > cooldown):
@@ -163,36 +164,44 @@ if __name__ == "__main__":
     try:
         # 设置时区
         tz = pytz.timezone('Asia/Shanghai')
-        print(f"🚀 云端监控 V11.8 永不掉线版启动...")
+        print(f"🚀 云端监控 V11.9 自动轮班版启动...")
         
+        # 记录启动时间
+        start_time = time.time()
+        # 设定最长运行时间：5小时55分 (21300秒)
+        # 目的是在GitHub的6小时强制关闭前，主动下班，保持绿色状态
+        MAX_RUN_TIME = 21300 
+
         while True:
+            # 0. 检查是否该下班了 (轮班机制核心)
+            if time.time() - start_time > MAX_RUN_TIME:
+                print(f"⚠️ 本班次已工作 5小时55分，主动下班，等待下一班机器人接力... 👋")
+                break # 退出循环，程序正常结束
+
             now = datetime.now(tz)
             
-            # 1. 简单判断：周末不交易，但不要退出程序，而是进入休眠
+            # 1. 周末判断 (不退出，而是短睡，等待下班时间到)
             if now.weekday() > 4: 
-                print(f"😴 周末休息中... ({now.strftime('%Y-%m-%d %H:%M')})")
-                time.sleep(3600) # 睡1小时再来看
+                print(f"😴 周末休息中... ({now.strftime('%m-%d %H:%M')})")
+                time.sleep(300) # 5分钟检查一次
                 continue
                 
-            # 2. 盘前盘后判断
+            # 2. 交易时间判断
             current_time = now.hour * 100 + now.minute
             
-            # 开盘前 (9:15前)
+            # 盘前 (9:15前)
             if current_time < 915:
                 print(f"⏳ 等待开盘... ({now.strftime('%H:%M')})")
-                time.sleep(300) # 睡5分钟
+                time.sleep(300) 
                 continue
                 
-            # 收盘后 (15:15后) -> 这里改了！不再 break，而是 sleep
+            # 收盘后 (15:15后)
             if current_time > 1515: 
-                print(f"😴 已收盘，进入待机模式... ({now.strftime('%H:%M')})")
-                time.sleep(1800) # 睡半小时，防止频繁打印
-                # 清除当日报警计数，方便第二天重新计数
-                alert_counts = {} 
-                last_alert_time = {}
+                print(f"😴 已收盘，待机中... ({now.strftime('%H:%M')})")
+                time.sleep(1800) # 收盘后睡久一点
                 continue
 
-            # 3. 盘中运行 (09:15 - 15:15)
+            # 3. 盘中监控
             try:
                 monitor_logic()
             except Exception as inner_e:
@@ -203,4 +212,3 @@ if __name__ == "__main__":
     except Exception as e:
         print("❌ 严重错误导致程序停止！")
         print(traceback.format_exc())
-        input("按回车键退出...") # 这一行能防止闪退，让你看清报错
