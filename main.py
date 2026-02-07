@@ -2,15 +2,18 @@ import requests
 import re
 import json
 import time
+import sys
 from datetime import datetime
 import pytz
 import urllib3
 import traceback 
 
+# 强制设置输出编码为 utf-8，防止日志乱码
+sys.stdout.reconfigure(encoding='utf-8')
 urllib3.disable_warnings()
 
 # ==============================================================================
-# 🎯 V11.9 自动轮班版：1守2攻 + 智能防超时 (完美适配GitHub)
+# 🎯 V16.0 GitHub 专享版：完美适配 requirements.txt + 修复Bug
 # ==============================================================================
 
 # 🔴🔴🔴 你的 PushPlus Token 🔴🔴🔴
@@ -20,7 +23,7 @@ PUSHPLUS_TOKEN = '229e6e58116042c8a0065709dd98eabc'
 THRESHOLDS = {
     "ATTACK": 1.0,           # 进攻：价差 < 1.0%
     "RETREAT": 3.0,          # 撤退：价差 > 3.0%
-    "MAX_ABS_PREMIUM": 6.5   # 风控：绝对溢价 > 6.5% 禁止买入
+    "MAX_ABS_PREMIUM": 6.5   # 风控：绝对溢价 > 6.5%
 }
 
 # 1对2 监控配置
@@ -43,21 +46,20 @@ GROUPS = [
     }
 ]
 
-# 全局变量记录报警状态
+# 全局变量
 last_alert_time = {}
 alert_counts = {}
+dca_daily_sent = False 
 
 def send_wechat(title, content):
-    """发送微信通知"""
+    """推送通知"""
     url = 'http://www.pushplus.plus/send'
     data = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "html"}
-    try: 
-        requests.post(url, json=data, timeout=5)
-    except: 
-        pass
+    try: requests.post(url, json=data, timeout=5)
+    except: pass
 
 def get_market_factors():
-    """获取期货和汇率因子"""
+    """获取行情因子"""
     headers = {"Referer": "https://finance.sina.com.cn"}
     try:
         url = "http://hq.sinajs.cn/list=gb_ndx,gb_inx,hf_NQ,hf_ES,fx_susdcnh"
@@ -78,35 +80,86 @@ def get_market_factors():
     except: return None
 
 def calc_premium(conf, factors):
-    """计算单个ETF的真实溢价率"""
+    """计算真溢价率"""
     try:
         # 1. 查现价
         r_p = requests.get(f"http://qt.gtimg.cn/q={conf['symbol']}", timeout=2)
         p_vals = r_p.content.decode('gbk', errors='ignore').split('~')
         price = float(p_vals[3]) if float(p_vals[3]) > 0 else float(p_vals[4])
         
-        # 2. 查T-1净值
+        # 2. 查净值
         ts = int(time.time() * 1000)
         r_n = requests.get(f"http://fundgz.1234567.com.cn/js/{conf['code']}.js?rt={ts}", timeout=2)
         match = re.search(r'jsonpgz\((.*?)\);', r_n.text)
         if not match: return None
         nav = float(json.loads(match.group(1))['dwjz'])
 
-        # 3. 计算实时IOPV
+        # 3. 计算IOPV
         close_pct = factors['inx_close'] if conf['index'] == 'gb_inx' else factors['ndx_close']
         future_pct = factors['es_future'] if conf['future'] == 'ES' else factors['nq_future']
-        
         iopv = nav * (1 + close_pct) * (1 + future_pct) * (1 + factors['usd_cnh'])
         
         return (price - iopv) / iopv * 100
     except: return None
 
-def monitor_logic():
-    """核心监控逻辑"""
+def get_dca_advice(code, premium_real, day):
+    """🧠 定投决策模块 (区分日期)"""
+    # 15号-月底是严选期，1号-14号是扫尾期
+    if day >= 15: period_name, is_strict = "上半月·严选期", True
+    else: period_name, is_strict = "下半月·扫尾期", False
+
+    # 招商纳指 (159659)
+    if code == "159659":
+        if premium_real < 0.2: return f"🟢 钻石底 ({period_name})", "梭哈本月额度 (4份)"
+        if premium_real > 1.3: return f"🔴 太贵了 ({period_name})", "停手 (0份)"
+        if is_strict:
+            return (f"🟡 舒适区 ({period_name})", "买入 1 份") if premium_real < 0.6 else (f"🟠 略高 ({period_name})", "观望")
+        else:
+            return (f"🟡 追赶区 ({period_name})", "买入 2 份") if premium_real < 1.0 else (f"🟠 勉强 ({period_name})", "买入 1 份")
+
+    # 华夏标普 (159655)
+    elif code == "159655":
+        if premium_real < -0.8: return f"🟢 黄金坑 ({period_name})", "梭哈本月额度 (2份)"
+        if premium_real > 0.8: return f"🔴 太贵了 ({period_name})", "停手 (0份)"
+        if is_strict:
+            return (f"🟡 舒适区 ({period_name})", "买入 1 份") if premium_real < 0.0 else (f"🟠 不折价 ({period_name})", "观望")
+        else:
+            return (f"🟡 扫尾区 ({period_name})", "买完剩余") if premium_real < 0.5 else (f"🟠 略高 ({period_name})", "少量补仓")
+            
+    return None, None
+
+def monitor_logic(now_time):
+    # 【修复关键】声明全局变量，否则会报错 UnboundLocalError
+    global dca_daily_sent 
+    
     f = get_market_factors()
     if not f: return
     
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] NQ:{f['nq_future']*100:+.2f}% | ES:{f['es_future']*100:+.2f}%")
+    # === A. 定投日报模块 (每天14:45触发) ===
+    current_hhmm = now_time.hour * 100 + now_time.minute
+    # 如果时间在 14:45 - 14:55 之间，且今天还没发过
+    if 1445 <= current_hhmm <= 1455 and not dca_daily_sent:
+        print("📅 生成定投日报...")
+        dca_msg = "<h3>📅 今日定投操作指南 (14:45)</h3>"
+        
+        # 获取招商纳指
+        p_159659 = calc_premium({"code":"159659","symbol":"sz159659","index":"gb_ndx","future":"NQ"}, f)
+        if p_159659 is not None:
+            status, action = get_dca_advice("159659", p_159659, now_time.day)
+            dca_msg += f"<p><b>🏠 招商纳指 (159659)</b><br>真溢价: {p_159659:.2f}%<br>评价: {status}<br>👉 <b>指令: {action}</b></p>"
+            
+        # 获取华夏标普
+        p_159655 = calc_premium({"code":"159655","symbol":"sz159655","index":"gb_inx","future":"ES"}, f)
+        if p_159655 is not None:
+            status, action = get_dca_advice("159655", p_159655, now_time.day)
+            dca_msg += f"<p><b>🏠 华夏标普 (159655)</b><br>真溢价: {p_159655:.2f}%<br>评价: {status}<br>👉 <b>指令: {action}</b></p>"
+            
+        send_wechat("📅 定投日报: 该下单了", dca_msg)
+        dca_daily_sent = True # 标记为已发送，防止重复发
+        print("✅ 定投日报已发送")
+
+    # === B. 套利轮动监控模块 (全天运行，无视日期) ===
+    print(f"[{now_time.strftime('%H:%M:%S')}] 监控中... NQ:{f['nq_future']*100:+.2f}%")
 
     for group in GROUPS:
         p_base = calc_premium(group['base'], f)
@@ -116,99 +169,70 @@ def monitor_logic():
             p_target = calc_premium(target, f)
             if p_target is None: continue
 
+            # 纯价差计算
             spread = p_target - p_base
-            alert_title = None
-            alert_msg = None
-            signal_type = ""
+            alert_title, alert_msg = None, None
 
-            # 进攻逻辑
+            # 进攻信号
             if spread < THRESHOLDS['ATTACK']:
                 if p_target < THRESHOLDS['MAX_ABS_PREMIUM']:
-                    signal_type = "进攻"
                     alert_title = f"⚔️ 进攻机会: {target['name']}"
-                    alert_msg = (
-                        f"<b>策略建议：卖出 {group['base']['name']} -> 买入 {target['name']}</b><br>"
-                        f"📉 相对价差: <font color='green'>{spread:.2f}%</font><br>"
-                        f"📊 目标真溢价: {p_target:.2f}% (安全)"
-                    )
-                else:
-                    print(f"   🚫 {target['name']} 价差达标，但溢价{p_target:.2f}%过高，拦截")
-
-            # 撤退逻辑
+                    alert_msg = f"策略: 卖出 {group['base']['name']} -> 买入 {target['name']}<br>价差: <font color='green'>{spread:.2f}%</font>"
+            # 撤退信号
             elif spread > THRESHOLDS['RETREAT']:
-                signal_type = "撤退"
                 alert_title = f"🔥 撤退信号: {target['name']}"
-                alert_msg = (
-                    f"<b>策略建议：止盈 {target['name']} -> 回防 {group['base']['name']}</b><br>"
-                    f"📈 相对价差: <font color='red'>{spread:.2f}%</font>"
-                )
+                alert_msg = f"策略: 止盈 {target['name']} -> 回防 {group['base']['name']}<br>价差: <font color='red'>{spread:.2f}%</font>"
 
-            # 发送逻辑
             if alert_title:
-                key = f"{target['code']}_{signal_type}"
+                key = f"{target['code']}_{alert_title}"
                 current_count = alert_counts.get(key, 0)
-                # 冷却规则: 前3次间隔10分钟(600s)，之后间隔1小时(3600s)
                 cooldown = 600 if current_count < 3 else 3600
-
+                # 冷却时间判断
                 if key not in last_alert_time or (time.time() - last_alert_time[key] > cooldown):
                     print(f"🚀 发送报警: {alert_title}")
-                    send_wechat(alert_title, alert_msg + f"<br><br><span style='color:gray'>今日第{current_count+1}次提醒</span>")
+                    send_wechat(alert_title, alert_msg)
                     last_alert_time[key] = time.time()
                     alert_counts[key] = current_count + 1
-                else:
-                    print(f"   ⏳ {target['name']} {signal_type} 冷却中...")
-            else:
-                print(f"   💤 {target['name']} vs {group['base']['name']} | 价差: {spread:.2f}%")
 
 if __name__ == "__main__":
     try:
-        # 设置时区
+        # 使用 pytz 获取上海时间，完美适配你的 requirements.txt
         tz = pytz.timezone('Asia/Shanghai')
-        print(f"🚀 云端监控 V11.9 自动轮班版启动...")
+        print(f"🚀 云端监控 V16.0 (GitHub 专享修复版) 启动...")
         
-        # 记录启动时间
         start_time = time.time()
-        # 设定最长运行时间：5小时55分 (21300秒)
-        # 目的是在GitHub的6小时强制关闭前，主动下班，保持绿色状态
+        # 5小时55分 (21300秒) 后自动退出，防止 GitHub 强制杀后台
         MAX_RUN_TIME = 21300 
 
         while True:
-            # 0. 检查是否该下班了 (轮班机制核心)
-            if time.time() - start_time > MAX_RUN_TIME:
-                print(f"⚠️ 本班次已工作 5小时55分，主动下班，等待下一班机器人接力... 👋")
-                break # 退出循环，程序正常结束
-
+            # 0. 自动下班机制
+            if time.time() - start_time > MAX_RUN_TIME: 
+                print("👋 运行时间达标，主动下班。")
+                break
+            
             now = datetime.now(tz)
             
-            # 1. 周末判断 (不退出，而是短睡，等待下班时间到)
+            # 1. 周末休息
             if now.weekday() > 4: 
-                print(f"😴 周末休息中... ({now.strftime('%m-%d %H:%M')})")
-                time.sleep(300) # 5分钟检查一次
-                continue
-                
-            # 2. 交易时间判断
+                print(f"😴 周末休息... {now.strftime('%m-%d %H:%M')}")
+                time.sleep(300); continue
+            
+            # 2. 交易时间判断 (09:15 - 15:15)
+            # 配合你的 Cron 09:10 启动，正好能覆盖全天
             current_time = now.hour * 100 + now.minute
-            
-            # 盘前 (9:15前)
             if current_time < 915:
-                print(f"⏳ 等待开盘... ({now.strftime('%H:%M')})")
-                time.sleep(300) 
-                continue
-                
-            # 收盘后 (15:15后)
+                print(f"⏳ 等待开盘... {now.strftime('%H:%M')}")
+                time.sleep(300); continue
             if current_time > 1515: 
-                print(f"😴 已收盘，待机中... ({now.strftime('%H:%M')})")
-                time.sleep(1800) # 收盘后睡久一点
-                continue
+                print(f"🌙 已收盘... {now.strftime('%H:%M')}")
+                # 既然一天只跑一次，收盘后就可以直接结束了
+                break 
 
-            # 3. 盘中监控
-            try:
-                monitor_logic()
-            except Exception as inner_e:
-                print(f"⚠️ 轮询出错: {inner_e}")
+            try: monitor_logic(now)
+            except: 
+                print("⚠️ 轮询出错:", traceback.format_exc())
             
-            time.sleep(60) # 每分钟轮询一次
+            time.sleep(60)
 
     except Exception as e:
-        print("❌ 严重错误导致程序停止！")
         print(traceback.format_exc())
