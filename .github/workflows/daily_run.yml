@@ -2,19 +2,20 @@ name: ETF Arbitrage Monitor
 
 on:
   schedule:
-    # 每天北京时间 09:10 (UTC 01:10) 自动启动
-    # 涵盖周一到周五
-    - cron: '10 1 * * 1-5'
-  
+    # 🌟 修改点：UTC 00:50 = 北京时间 08:50
+    # 完美避开早高峰，且能坚持到下午发完定投日报
+    - cron: '50 0 * * 1-5'
+
   # 允许手动点击按钮测试
   workflow_dispatch:
 
 jobs:
   run_monitor:
     runs-on: ubuntu-latest
-    
-    # 设置超时时间为 380 分钟 (约 6.5 小时)，防止脚本意外卡死
-    timeout-minutes: 380
+
+    # 设置超时时间为 365 分钟 (6小时05分)
+    # 配合 Python 代码的自动退出机制
+    timeout-minutes: 365
 
     steps:
       - name: Checkout code
