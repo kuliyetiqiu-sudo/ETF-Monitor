@@ -2,34 +2,37 @@ name: ETF Arbitrage Monitor
 
 on:
   schedule:
-    # 🌟 修改点：UTC 00:50 = 北京时间 08:50
-    # 完美避开早高峰，且能坚持到下午发完定投日报
+    # 🌟 UTC 00:50 = 北京时间 08:50
+    # 这是每天自动启动的时间
     - cron: '50 0 * * 1-5'
 
-  # 允许手动点击按钮测试
+  # 允许你手动点击按钮测试
   workflow_dispatch:
 
 jobs:
   run_monitor:
     runs-on: ubuntu-latest
 
-    # 设置超时时间为 365 分钟 (6小时05分)
-    # 配合 Python 代码的自动退出机制
+    # 设置超时时间，防止程序卡死
     timeout-minutes: 365
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
           python-version: '3.9'
+          cache: 'pip' # 开启缓存，安装更快
 
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
 
       - name: Run Monitor Script
+        env:
+          # 强制设置时区为北京时间
+          TZ: 'Asia/Shanghai'
         run: |
           python main.py
