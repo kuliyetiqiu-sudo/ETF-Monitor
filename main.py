@@ -8,15 +8,15 @@ import pytz
 import urllib3
 import traceback 
 
-# 强制设置输出编码为 utf-8，防止日志乱码
+# 强制设置输出编码为 utf-8，防止 GitHub Actions 日志乱码
 sys.stdout.reconfigure(encoding='utf-8')
 urllib3.disable_warnings()
 
 # ==============================================================================
-# 🎯 V17.1 自动通知版：08:50 启动 -> 微信通知 -> 14:55 下班
+# 🎯 V18.0 融合版：本地数据源 + 云端自动推送
 # ==============================================================================
 
-# 🔴🔴🔴 你的 PushPlus Token (直接填在这里，方便你复制) 🔴🔴🔴
+# 🔴🔴🔴 你的 PushPlus Token 🔴🔴🔴
 PUSHPLUS_TOKEN = '229e6e58116042c8a0065709dd98eabc' 
 
 # 核心策略阈值
@@ -62,7 +62,7 @@ def send_wechat(title, content):
         print(f"❌ 微信通知发送失败: {e}")
 
 def get_market_factors():
-    """获取行情因子"""
+    """获取行情因子 (新浪源，与本地程序一致)"""
     headers = {"Referer": "https://finance.sina.com.cn"}
     try:
         url = "http://hq.sinajs.cn/list=gb_ndx,gb_inx,hf_NQ,hf_ES,fx_susdcnh"
@@ -83,31 +83,42 @@ def get_market_factors():
     except: return None
 
 def calc_premium(conf, factors):
-    """计算真溢价率"""
+    """
+    计算真溢价率
+    🔥 移植自本地程序：使用天天基金网 (1234567.com.cn) 获取净值
+    """
     try:
-        # 1. 查现价
+        # 1. 查现价 (腾讯源)
         r_p = requests.get(f"http://qt.gtimg.cn/q={conf['symbol']}", timeout=2)
         p_vals = r_p.content.decode('gbk', errors='ignore').split('~')
         price = float(p_vals[3]) if float(p_vals[3]) > 0 else float(p_vals[4])
         
-        # 2. 查净值
-        sina_code = f"f_{conf['code']}" 
-        r_n = requests.get(f"http://hq.sinajs.cn/list={sina_code}", timeout=2)
-        nav_data = r_n.text.split('=')[1].strip('";').split(',')
-        nav_official = float(nav_data[1])
+        # 2. 查净值 (天天基金源 - 关键修改点)
+        timestamp = int(time.time() * 1000)
+        r_n = requests.get(f"http://fundgz.1234567.com.cn/js/{conf['code']}.js?rt={timestamp}", timeout=2)
+        
+        # 正则提取 jsonpgz({...}); 中的内容
+        match = re.search(r'jsonpgz\((.*?)\);', r_n.text)
+        if not match:
+            return None
+            
+        nav_data = json.loads(match.group(1))
+        nav_t1 = float(nav_data['dwjz']) # 单位净值
 
         # 3. 计算估值 (IOPV)
+        # 逻辑：T-1净值 * (1+指数涨跌) * (1+期货涨跌) * (1+汇率涨跌)
         close_pct = factors['inx_close'] if conf['index'] == 'gb_inx' else factors['ndx_close']
         future_pct = factors['es_future'] if conf['future'] == 'ES' else factors['nq_future']
         
-        nav_estimate_t1 = nav_official * (1 + close_pct)
-        iopv = nav_estimate_t1 * (1 + future_pct) * (1 + factors['usd_cnh'])
+        iopv = nav_t1 * (1 + close_pct) * (1 + future_pct) * (1 + factors['usd_cnh'])
         
         return (price - iopv) / iopv * 100
-    except: return None
+    except Exception as e: 
+        # print(f"计算报错 {conf['code']}: {e}")
+        return None
 
 def get_dca_advice(code, premium_real, day):
-    """定投决策模块"""
+    """定投决策模块 (保持不变)"""
     if day >= 15: period_name, is_strict = "上半月·严选期", True
     else: period_name, is_strict = "下半月·扫尾期", False
 
@@ -143,11 +154,13 @@ def monitor_logic(now_time):
         print("📅 生成定投日报...")
         dca_msg = "<h3>📅 今日定投操作指南 (14:45)</h3>"
         
+        # 招商纳指
         p_159659 = calc_premium({"code":"159659","symbol":"sz159659","index":"gb_ndx","future":"NQ"}, f)
         if p_159659 is not None:
             status, action = get_dca_advice("159659", p_159659, now_time.day)
             dca_msg += f"<p><b>🏠 招商纳指 (159659)</b><br>真溢价: {p_159659:.2f}%<br>评价: {status}<br>👉 <b>指令: {action}</b></p>"
             
+        # 华夏标普
         p_159655 = calc_premium({"code":"159655","symbol":"sz159655","index":"gb_inx","future":"ES"}, f)
         if p_159655 is not None:
             status, action = get_dca_advice("159655", p_159655, now_time.day)
@@ -197,11 +210,10 @@ if __name__ == "__main__":
         
         print(f"🚀 正在启动监控... ({start_dt})")
         
-        # 2. 【关键】发送启动通知
-        # 只要微信收到这条，说明 GitHub 运行正常！
+        # 2. 发送启动通知 (确认程序存活)
         send_wechat(
-            "🚀 监控已启动", 
-            f"✅ 程序已上线 GitHub Actions<br>⏰ 启动时间: {start_dt}<br>📊 状态: 监控中..."
+            "🚀 监控已启动 (V18.0)", 
+            f"✅ 程序已上线 GitHub Actions<br>⏰ 启动时间: {start_dt}<br>📊 数据源: 天天基金+腾讯"
         )
 
         # 设定运行时间 (约 5小时55分)
@@ -224,7 +236,7 @@ if __name__ == "__main__":
             
             current_time = now.hour * 100 + now.minute
             
-            # 08:50 - 09:15 占坑模式 (防止 GitHub 拥堵)
+            # 08:50 - 09:15 占坑模式
             if current_time < 915:
                 print(f"⏳ 占坑成功，等待开盘... {now.strftime('%H:%M')}")
                 time.sleep(60); continue
@@ -241,7 +253,8 @@ if __name__ == "__main__":
             time.sleep(60)
 
     except Exception as e:
-        # 如果程序崩了，发送报错通知
+        # 报错通知
         error_msg = traceback.format_exc()
         print("⚠️ 程序异常:", error_msg)
         send_wechat("❌ 监控报错: 程序异常退出", f"<pre>{error_msg}</pre>")
+
