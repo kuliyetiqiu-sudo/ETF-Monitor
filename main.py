@@ -13,7 +13,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 urllib3.disable_warnings()
 
 # ==============================================================================
-# 🎯 V18.0 融合版：本地数据源 + 云端自动推送
+# 🎯 V19.0 究极版：双班倒 + 智能待机 + 盘前观察
 # ==============================================================================
 
 # 🔴🔴🔴 你的 PushPlus Token 🔴🔴🔴
@@ -62,7 +62,7 @@ def send_wechat(title, content):
         print(f"❌ 微信通知发送失败: {e}")
 
 def get_market_factors():
-    """获取行情因子 (新浪源，与本地程序一致)"""
+    """获取行情因子 (新浪源)"""
     headers = {"Referer": "https://finance.sina.com.cn"}
     try:
         url = "http://hq.sinajs.cn/list=gb_ndx,gb_inx,hf_NQ,hf_ES,fx_susdcnh"
@@ -83,46 +83,37 @@ def get_market_factors():
     except: return None
 
 def calc_premium(conf, factors):
-    """
-    计算真溢价率
-    🔥 移植自本地程序：使用天天基金网 (1234567.com.cn) 获取净值
-    """
+    """计算真溢价率"""
     try:
         # 1. 查现价 (腾讯源)
         r_p = requests.get(f"http://qt.gtimg.cn/q={conf['symbol']}", timeout=2)
         p_vals = r_p.content.decode('gbk', errors='ignore').split('~')
         price = float(p_vals[3]) if float(p_vals[3]) > 0 else float(p_vals[4])
         
-        # 2. 查净值 (天天基金源 - 关键修改点)
+        # 2. 查净值 (天天基金源)
         timestamp = int(time.time() * 1000)
         r_n = requests.get(f"http://fundgz.1234567.com.cn/js/{conf['code']}.js?rt={timestamp}", timeout=2)
         
-        # 正则提取 jsonpgz({...}); 中的内容
         match = re.search(r'jsonpgz\((.*?)\);', r_n.text)
-        if not match:
-            return None
+        if not match: return None
             
         nav_data = json.loads(match.group(1))
-        nav_t1 = float(nav_data['dwjz']) # 单位净值
+        nav_t1 = float(nav_data['dwjz'])
 
         # 3. 计算估值 (IOPV)
-        # 逻辑：T-1净值 * (1+指数涨跌) * (1+期货涨跌) * (1+汇率涨跌)
         close_pct = factors['inx_close'] if conf['index'] == 'gb_inx' else factors['ndx_close']
         future_pct = factors['es_future'] if conf['future'] == 'ES' else factors['nq_future']
         
         iopv = nav_t1 * (1 + close_pct) * (1 + future_pct) * (1 + factors['usd_cnh'])
-        
         return (price - iopv) / iopv * 100
     except Exception as e: 
-        # print(f"计算报错 {conf['code']}: {e}")
         return None
 
 def get_dca_advice(code, premium_real, day):
-    """定投决策模块 (保持不变)"""
+    """定投决策模块"""
     if day >= 15: period_name, is_strict = "上半月·严选期", True
     else: period_name, is_strict = "下半月·扫尾期", False
 
-    # 招商纳指 (159659)
     if code == "159659":
         if premium_real < 0.2: return f"🟢 钻石底 ({period_name})", "梭哈本月额度 (4份)"
         if premium_real > 1.3: return f"🔴 太贵了 ({period_name})", "停手 (0份)"
@@ -131,7 +122,6 @@ def get_dca_advice(code, premium_real, day):
         else:
             return (f"🟡 追赶区 ({period_name})", "买入 2 份") if premium_real < 1.0 else (f"🟠 勉强 ({period_name})", "买入 1 份")
 
-    # 华夏标普 (159655)
     elif code == "159655":
         if premium_real < -0.8: return f"🟢 黄金坑 ({period_name})", "梭哈本月额度 (2份)"
         if premium_real > 0.8: return f"🔴 太贵了 ({period_name})", "停手 (0份)"
@@ -154,13 +144,11 @@ def monitor_logic(now_time):
         print("📅 生成定投日报...")
         dca_msg = "<h3>📅 今日定投操作指南 (14:45)</h3>"
         
-        # 招商纳指
         p_159659 = calc_premium({"code":"159659","symbol":"sz159659","index":"gb_ndx","future":"NQ"}, f)
         if p_159659 is not None:
             status, action = get_dca_advice("159659", p_159659, now_time.day)
             dca_msg += f"<p><b>🏠 招商纳指 (159659)</b><br>真溢价: {p_159659:.2f}%<br>评价: {status}<br>👉 <b>指令: {action}</b></p>"
             
-        # 华夏标普
         p_159655 = calc_premium({"code":"159655","symbol":"sz159655","index":"gb_inx","future":"ES"}, f)
         if p_159655 is not None:
             status, action = get_dca_advice("159655", p_159655, now_time.day)
@@ -209,21 +197,15 @@ if __name__ == "__main__":
         start_dt = datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')
         
         print(f"🚀 正在启动监控... ({start_dt})")
-        
-        # 2. 发送启动通知 (确认程序存活)
-        send_wechat(
-            "🚀 监控已启动 (V18.0)", 
-            f"✅ 程序已上线 GitHub Actions<br>⏰ 启动时间: {start_dt}<br>📊 数据源: 天天基金+腾讯"
-        )
+        send_wechat(f"🚀 监控已启动 ({datetime.now(tz).strftime('%H:%M')})", f"✅ 程序上线 GitHub Actions<br>⏰ 启动时间: {start_dt}")
 
-        # 设定运行时间 (约 5小时55分)
+        # 设定单次最大运行时间 (6小时 - 留5分钟余量)
         MAX_RUN_TIME = 21300 
 
         while True:
-            # 自动下班
+            # 自动超时下班 (配合 GitHub Timeout)
             if time.time() - start_time > MAX_RUN_TIME: 
-                print("👋 运行时间达标，主动下班。")
-                send_wechat("🌙 监控结束", "今日任务已完成，自动下班。")
+                print("👋 运行时间达标，主动释放资源。")
                 break
             
             now = datetime.now(tz)
@@ -231,30 +213,41 @@ if __name__ == "__main__":
             # 周末休息
             if now.weekday() > 4: 
                 print(f"😴 周末休息... {now.strftime('%m-%d %H:%M')}")
-                send_wechat("😴 周末休息", "今天是周末，程序将自动退出。")
                 break
             
             current_time = now.hour * 100 + now.minute
             
-            # 08:50 - 09:15 占坑模式
-            if current_time < 915:
-                print(f"⏳ 占坑成功，等待开盘... {now.strftime('%H:%M')}")
-                time.sleep(60); continue
-                
+            # === 核心修改点：分阶段智能等待 ===
+            
+            # 阶段一：抢跑待机 (早于 09:00)
+            if current_time < 900:
+                print(f"💤 占坑成功，挂机中... (当前: {now.strftime('%H:%M')})")
+                time.sleep(300) # 5分钟醒一次，防止日志刷屏
+                continue
+            
+            # 阶段二：盘前热身 (09:00 - 09:25)
+            # 避开 9:15-9:25 的集合竞价假数据
+            elif current_time < 925:
+                # 顺便看看纳指期货，不进行操作
+                f_preview = get_market_factors()
+                nq_pre = f_preview['nq_future']*100 if f_preview else 0
+                print(f"⏳ 盘前准备 | NQ期货: {nq_pre:+.2f}% | 等待 9:30 开盘... {now.strftime('%H:%M')}")
+                time.sleep(60)
+                continue
+
             # 15:05 收盘退出
             if current_time > 1505: 
                 print(f"🌙 已收盘... {now.strftime('%H:%M')}")
                 send_wechat("🌙 已收盘", "今日行情结束，程序退出。")
                 break 
 
-            # 执行监控
+            # 执行正式监控
             monitor_logic(now)
             
             time.sleep(60)
 
     except Exception as e:
-        # 报错通知
         error_msg = traceback.format_exc()
         print("⚠️ 程序异常:", error_msg)
-        send_wechat("❌ 监控报错: 程序异常退出", f"<pre>{error_msg}</pre>")
+        send_wechat("❌ 监控报错", f"<pre>{error_msg}</pre>")
 
