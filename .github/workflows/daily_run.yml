@@ -2,9 +2,15 @@ name: ETF Arbitrage Monitor
 
 on:
   schedule:
-    # 🌟 UTC 00:50 = 北京时间 08:50
-    # 这是每天自动启动的时间
-    - cron: '50 0 * * 1-5'
+    # --- 第一班车：早盘盯盘 (覆盖 07:40 - 13:40) ---
+    # 🕒 UTC 23:40 = 北京时间 07:40
+    # ⚠️ 星期：UTC 周日~周四 = 北京 周一~周五
+    - cron: '40 23 * * 0-4'
+
+    # --- 第二班车：午盘/下午接力 (覆盖 13:40 - 19:40) ---
+    # 🕒 UTC 05:40 = 北京时间 13:40 (第一班跑了6小时刚好到这时)
+    # ⚠️ 星期：UTC 周一~周五 = 北京 周一~周五 (因为过了午夜，日期对上了)
+    - cron: '40 5 * * 1-5'
 
   # 允许你手动点击按钮测试
   workflow_dispatch:
@@ -13,8 +19,8 @@ jobs:
   run_monitor:
     runs-on: ubuntu-latest
 
-    # 设置超时时间，防止程序卡死
-    timeout-minutes: 365
+    # 设置超时时间 360分钟(6小时)，刚好让两班车无缝衔接
+    timeout-minutes: 360
 
     steps:
       - name: Checkout code
